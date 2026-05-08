@@ -1402,6 +1402,65 @@ const vector<int> CardPatternAnalysis::reserve_value_table[18] = {
     {52}, // 小王
     {53} // 大王
 };
+
+// 给一个候选动作打分：分数越高，越优先被搜索和兜底策略看到。
+// 这个分数不是“绝对好坏”，只是用来决定先试哪些牌。
+static int getActionSortScore(const vector<int>& action) {
+    if (action.empty()) return -100;
+
+    int type = CardPatternAnalysis::getCardTypeFromPoints(action);
+    int size = (int)action.size();
+    int mainValue = PatternCheck::getMainValueOfLastMove(action);
+
+    int score = 0;
+
+    // 长套优先：它们通常更利于快速走牌。
+    switch (type) {
+    case CardPatternAnalysis::TRIPLE_SEQUENCE_WITH_ONE:
+    case CardPatternAnalysis::TRIPLE_SEQUENCE_WITH_TWO_PAIRS:
+        score = 950 + size * 10;
+        break;
+    case CardPatternAnalysis::TRIPLE_SEQUENCE:
+        score = 900 + size * 10;
+        break;
+    case CardPatternAnalysis::PAIR_SEQUENCE:
+        score = 850 + size * 10;
+        break;
+    case CardPatternAnalysis::STRAIGHT:
+        score = 800 + size * 10;
+        break;
+    case CardPatternAnalysis::QUAD_WITH_PAIRS:
+    case CardPatternAnalysis::QUAD_WITH_SINGLES:
+        score = 720 + size * 10;
+        break;
+    case CardPatternAnalysis::THREE_WITH_TWO:
+    case CardPatternAnalysis::THREE_WITH_ONE:
+        score = 650 + size * 10;
+        break;
+    case CardPatternAnalysis::TRIPLE:
+        score = 500 + size * 10;
+        break;
+    case CardPatternAnalysis::PAIR:
+        score = 300 + size * 10;
+        break;
+    case CardPatternAnalysis::SINGLE:
+        score = 200 + size * 10;
+        break;
+    case CardPatternAnalysis::BOMB:
+        score = 120 + mainValue;
+        break;
+    case CardPatternAnalysis::ROCKET:
+        score = 100 + mainValue;
+        break;
+    default:
+        score = 100 + size * 10;
+        break;
+    }
+
+    // 同类型里，点数更小的动作一般更容易先试出“保留大牌”的路线。
+    score += (17 - mainValue);
+    return score;
+}
 // 手牌索引类。
 // 它把“牌面点数 -> 实际牌号”整理好，方便快速取牌。
 // 可以把它想成一个按点数分好的抽屉柜：要找某个点数的牌，直接去对应抽屉拿。
@@ -1736,6 +1795,14 @@ public:
             allActions.push_back({}); // 过牌
         }
 
+        sort(allActions.begin(), allActions.end(), [](const vector<int>& a, const vector<int>& b) {
+            int scoreA = getActionSortScore(a);
+            int scoreB = getActionSortScore(b);
+            if (scoreA != scoreB) return scoreA > scoreB;
+            if (a.size() != b.size()) return a.size() > b.size();
+            return a < b;
+        });
+
         Cache_Actions = allActions;
         Actions_cached = true;
         return allActions;
@@ -1832,9 +1899,12 @@ vector<int> getBestActionByPriority(const int* hand, const vector<int>& lastMove
         if (enumerator) {
             actions = enumerator(cnt, lastMovePatterns);
             if (!actions.empty()) {
-                // 选主值最大的动作
+                // 先挑更像“顺手把牌打顺”的动作。
                 sort(actions.begin(), actions.end(), [](const vector<int>& a, const vector<int>& b) {
-                    return PatternCheck::getMainValueOfLastMove(a) > PatternCheck::getMainValueOfLastMove(b);
+                    int scoreA = getActionSortScore(a);
+                    int scoreB = getActionSortScore(b);
+                    if (scoreA != scoreB) return scoreA > scoreB;
+                    return PatternCheck::getMainValueOfLastMove(a) < PatternCheck::getMainValueOfLastMove(b);
                 });
                 return actions[0];
             }
