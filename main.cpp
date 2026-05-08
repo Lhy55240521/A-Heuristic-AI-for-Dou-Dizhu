@@ -15,6 +15,8 @@
 #include<numeric>
 #include"jsoncpp/json.h"
 using namespace std;
+// 这是一份斗地主机器人程序。
+// 代码结构大致是：牌型判断 -> 手牌分析 -> 对手猜测 -> 蒙特卡洛搜索 -> 主函数输入输出。
 /*斗地主bot --botzone作业
 叫分及确定地主
 从0号玩家开始，每个玩家轮流选择不叫分或者叫一个比目前为止最高分高的分数（不超过3）。玩家叫3分或2号玩家决策结束后，叫分阶段结束。叫分最高的玩家成为地主，或在没有人叫分的情况下，0号玩家成为地主。
@@ -176,7 +178,16 @@ using namespace std;
 
     作者：舒义鹏，时间：2026-4-7
 */
+// 全局随机数引擎（程序启动时初始化，使用硬件熵源）
+static mt19937 globalRng(random_device{}());
+
+// 返回 [low, high] 内的均匀随机整数
+inline int randomInt(int low, int high) {
+    return uniform_int_distribution<int>(low, high)(globalRng);
+}
 //==========牌型结构体==========//
+// 这些小结构体只是“标签”，表示一种牌型。
+// 例如 Single 表示单张，Straight 表示顺子，Rocket 表示火箭。
 struct Rocket {};
 struct Bomb { int value; };
 struct Single { int value; };
@@ -199,7 +210,11 @@ using CardPattern = variant<
     QuadWithPairs, PlanWithSingles
     , PlanWithPairs>;
 //====牌型检测命名空间===//
+// 这一段负责判断“手里的牌到底是什么牌型”，以及“同一种牌里谁更大”。
 namespace PatternCheck {
+    // 判断一组牌是不是火箭。
+    // 输入 cnt 是“点数 -> 张数”的统计表，lastMovePatterns 只在跟牌时使用。
+    // exact=true 时要求这 2 张牌正好就是两个王；exact=false 时只要手里能凑出两个王，就认为找到了一个火箭。
     bool check(const int cnt[18], const vector<int>& /*lastMovePatterns*/, Rocket&, bool exact = false) {
         if (exact) {
             int total = 0;
@@ -211,7 +226,9 @@ namespace PatternCheck {
         }
     }
 
-    // Bomb
+    // 判断一组牌是不是炸弹，或者在跟牌时是不是更大的炸弹。
+    // 返回值表示“能不能组成这种牌型”，同时会把炸弹的点数写回 bomb.value。
+    // exact=true 表示必须整整 4 张且没有别的牌；false 表示只要能找到一个比上家大的炸弹就行。
     bool check(const int cnt[18], const vector<int>& lastMovePatterns, Bomb& bomb, bool exact = false) {
         if (exact) {
             int total = 0, quadVal = -1;
@@ -239,7 +256,8 @@ namespace PatternCheck {
         }
     }
 
-    // Single
+    // 判断一组牌是不是单张，或者在跟牌时是不是更大的单张。
+    // exact=true 时只能有 1 张牌；exact=false 时会从小到大找一个能压过上家的单张。
     bool check(const int cnt[18], const vector<int>& lastMovePatterns, Single& single, bool exact = false) {
         if (exact) {
             int total = 0, val = -1;
@@ -266,7 +284,8 @@ namespace PatternCheck {
         }
     }
 
-    // Pair
+    // 判断一组牌是不是对子，或者在跟牌时是不是更大的对子。
+    // 这个函数会把最终找到的对子点数写到 pair.value 里。
     bool check(const int cnt[18], const vector<int>& lastMovePatterns, Pair& pair, bool exact = false) {
         if (exact) {
             int total = 0, val = -1;
@@ -293,7 +312,8 @@ namespace PatternCheck {
         }
     }
 
-    // Triple
+    // 判断一组牌是不是三张，或者在跟牌时是不是更大的三张。
+    // 三张通常是很多复合牌型的“主干”，后面几类牌型都会先复用这个判断。
     bool check(const int cnt[18], const vector<int>& lastMovePatterns, Triple& triple, bool exact = false) {
         if (exact) {
             int total = 0, val = -1;
@@ -320,7 +340,8 @@ namespace PatternCheck {
         }
     }
 
-    // Straight
+    // 判断一组牌是不是顺子。
+    // 顺子要求至少 5 张，且只能由连续的单张组成，2 和王不能进顺子。
     bool check(const int cnt[18], const vector<int>& lastMovePatterns, Straight& straight, bool exact = false) {
         if (exact) {
             int total = 0;
@@ -365,7 +386,8 @@ namespace PatternCheck {
         }
     }
 
-    // PairSequence
+    // 判断一组牌是不是连对。
+    // 连对就是“连续的对子”，至少 3 个对子起步。
     bool check(const int cnt[18], const vector<int>& lastMovePatterns, PairSequence& ps, bool exact = false) {
         if (exact) {
             int total = 0;
@@ -412,7 +434,8 @@ namespace PatternCheck {
         }
     }
 
-    // TripleSequence (飞机无翼)
+    // 判断一组牌是不是飞机，不带翅膀的那种。
+    // 这里的“飞机”指连续的三张，不要求带单牌或对子。
     bool check(const int cnt[18], const vector<int>& lastMovePatterns, TripleSequence& ts, bool exact = false) {
         if (exact) {
             int total = 0;
@@ -459,7 +482,8 @@ namespace PatternCheck {
         }
     }
 
-    // TripleWithOne
+    // 判断一组牌是不是“三带一”。
+    // 也就是 3 张相同点数的牌，外加 1 张别的牌。
     bool check(const int cnt[18], const vector<int>& lastMovePatterns, TripleWithOne& tws, bool exact = false) {
         if (exact) {
             int total = 0;
@@ -498,7 +522,8 @@ namespace PatternCheck {
         }
     }
 
-    // TripleWithTwo
+    // 判断一组牌是不是“三带二”。
+    // 也就是 3 张相同点数的牌，再加 1 个对子。
     bool check(const int cnt[18], const vector<int>& lastMovePatterns, TripleWithTwo& tws, bool exact = false) {
         if (exact) {
             int total = 0;
@@ -537,7 +562,8 @@ namespace PatternCheck {
         }
     }
 
-    // QuadWithSingles
+    // 判断一组牌是不是“四带二单”。
+    // 4 张同点数的牌，再带 2 张散牌。
     bool check(const int cnt[18], const vector<int>& lastMovePatterns, QuadWithSingles& qws, bool exact = false) {
         if (exact) {
             int total = 0;
@@ -581,7 +607,8 @@ namespace PatternCheck {
         }
     }
 
-    // QuadWithPairs
+    // 判断一组牌是不是“四带二对”。
+    // 4 张同点数的牌，再带 2 个对子。
     bool check(const int cnt[18], const vector<int>& lastMovePatterns, QuadWithPairs& qwp, bool exact = false) {
         if (exact) {
             int total = 0;
@@ -625,7 +652,8 @@ namespace PatternCheck {
         }
     }
 
-    // PlanWithSingles (飞机带单牌)
+    // 判断一组牌是不是“飞机带单牌”。
+    // 先找连续三张的主干，再从剩余牌里挑同样数量的单牌做翅膀。
     bool check(const int cnt[18], const vector<int>& lastMovePatterns, PlanWithSingles& pws, bool exact = false) {
         if (exact) {
             int total = 0;
@@ -685,7 +713,8 @@ namespace PatternCheck {
         }
     }
 
-    // PlanWithPairs (飞机带对子)
+    // 判断一组牌是不是“飞机带对子”。
+    // 逻辑和飞机带单牌一样，只是翅膀从单牌换成对子。
     bool check(const int cnt[18], const vector<int>& lastMovePatterns, PlanWithPairs& pwp, bool exact = false) {
         if (exact) {
             int total = 0;
@@ -742,32 +771,38 @@ namespace PatternCheck {
             return true;
         }
     }
+    // 从“上家出的牌”里找主值。
+    // 比如单张/对子/三张时，主值就是那张牌的点数；顺子、连对、飞机时，主值就是起始点数。
+    // 这个值专门给“比较大小”和“枚举更大的牌”使用。
     int getMainValueOfLastMove(const vector<int>& lastMovePatterns) {
-        if (lastMovePatterns.empty()) return 0;
-        int cnt[18] = { 0 };
-        for (int v : lastMovePatterns) cnt[v]++;
+         if (lastMovePatterns.empty()) return 0;
+    int cnt[18] = {0};
+    for (int v : lastMovePatterns) cnt[v]++;
 
-        int sz = lastMovePatterns.size();
+    int sz = (int)lastMovePatterns.size();
 
-        // 单张/对子/三条/炸弹：首元素就是主值
-        if (sz == 1 || sz == 2 || sz == 3 || sz == 4) {
-            return lastMovePatterns[0];
-        }
+    // 单张/对子/三条
+    if (sz == 1 || sz == 2 || sz == 3)
+        return lastMovePatterns[0];
 
-        // 火箭：大小王，也正确
-        if (sz == 2 && cnt[16] == 1 && cnt[17] == 1) return 16; // 大小王比较时16<17，但火箭最大，用16也行
+    // 火箭
+    if (sz == 2 && cnt[16] == 1 && cnt[17] == 1) return 16;
 
-        // 顺子：sz张，都是1张且连续
-        bool isStraight = true;
-        int startStraight = -1, lenStraight = 0;
-        for (int v = 3; v <= 14; ++v) {
-            if (cnt[v] == 1) {
-                if (startStraight == -1) startStraight = v;
-                lenStraight++;
-            }
-            else if (cnt[v] > 1) { isStraight = false; break; }
-        }
-        if (isStraight && lenStraight == sz) return startStraight;
+    // 三带一 (sz=4) 或 三带二 (sz=5)
+    if (sz == 4 || sz == 5) {
+        for (int v = 3; v <= 17; ++v)
+            if (cnt[v] >= 3) return v;   // 返回三条的点数
+        // 如果是炸弹 (cnt[v]==4, 没有>=3但未满足) 则返回首元素
+        return lastMovePatterns[0];
+    }
+
+    // 四带二
+    if (sz == 6 || sz == 8) {
+        for (int v = 3; v <= 17; ++v)
+            if (cnt[v] >= 4) return v;
+    }
+
+         
 
         // 连对：sz是偶数，每张2且连续
         if (sz % 2 == 0) {
@@ -798,18 +833,18 @@ namespace PatternCheck {
             if (isTriSeq && lenTS == k) return startTS;
         }
 
-        // 三带一 (sz=4) 或 三带二 (sz=5)：找到cnt==3或>=3的值
-        if (sz == 4 || sz == 5) {
-            for (int v = 3; v <= 17; ++v)
-                if (cnt[v] >= 3) return v;
+         
+        // 顺子：sz张，都是1张且连续
+        bool isStraight = true;
+        int startStraight = -1, lenStraight = 0;
+        for (int v = 3; v <= 14; ++v) {
+            if (cnt[v] == 1) {
+                if (startStraight == -1) startStraight = v;
+                lenStraight++;
+            }
+            else if (cnt[v] > 1) { isStraight = false; break; }
         }
-
-        // 四带二单 (sz=6) 或 四带二对 (sz=8)：找到cnt>=4的值
-        if (sz == 6 || sz == 8) {
-            for (int v = 3; v <= 17; ++v)
-                if (cnt[v] >= 4) return v;
-        }
-
+        if (isStraight && lenStraight == sz) return startStraight;
         // 飞机带单 (sz = 4k, k>=2) 或飞机带对 (sz = 5k, k>=2)
         if ((sz >= 8 && sz % 4 == 0) || (sz >= 10 && sz % 5 == 0)) {
             int seqStart = -1, seqLen = 0;
@@ -830,10 +865,13 @@ namespace PatternCheck {
         // fallback
         return lastMovePatterns[0];
     }
+    // 枚举火箭：如果同时有两个王，就只能得到一种答案。
     inline vector<vector<int>> enumerateRocket(const int cnt[18]) {
         if (cnt[16] >= 1 && cnt[17] >= 1) return { {16, 17} };
         return {};
     }
+    // 枚举炸弹：返回所有能出的四张同点数组合。
+    // 如果是跟炸弹，还会只保留比上家更大的炸弹。
     inline vector<vector<int>> enumerateBombs(const int cnt[18], const vector<int>& lastMovePatterns) {
         vector<vector<int>> result;
         int minVal = 3;
@@ -844,6 +882,7 @@ namespace PatternCheck {
         }
         return result;
     }
+    // 枚举单张：从小到大把每一个能出的点数都列出来。
     inline vector<vector<int>> enumerateSingles(const int cnt[18], const vector<int>& lastMovePatterns) {
         vector<vector<int>> result;
         int minVal = 3;
@@ -854,6 +893,7 @@ namespace PatternCheck {
         }
         return result;
     }
+    // 枚举对子：把所有能组成对子、且能压过上家的对子都列出来。
     inline vector<vector<int>> enumeratePairs(const int cnt[18], const vector<int>& lastMovePatterns) {
         vector<vector<int>> result;
         int minVal = 3;
@@ -864,6 +904,7 @@ namespace PatternCheck {
         }
         return result;
     }
+    // 枚举三张：把所有三张牌型都找出来。
     inline vector<vector<int>> enumerateTriples(const int cnt[18], const vector<int>& lastMovePatterns) {
         vector<vector<int>> result;
         int minVal = 3;
@@ -874,6 +915,7 @@ namespace PatternCheck {
         }
         return result;
     }
+    // 枚举顺子：找出所有连续单张组合。
     inline vector<vector<int>> enumerateStraights(const int cnt[18], const vector<int>& lastMovePatterns) {
         vector<vector<int>> result;
         int lastLen = 0, lastStart = 0;
@@ -1118,6 +1160,7 @@ class CardPatternAnalysis {
 private:
     static const  vector<int> reserve_value_table[18];
 public:
+    // 这些常量给不同牌型编号，后面比较和分支时会用到。
     static const int SINGLE = 0;
     static const int PAIR = 1;
     static const int TRIPLE = 2;
@@ -1132,6 +1175,7 @@ public:
     static const int ROCKET = 11;
     static const int QUAD_WITH_SINGLES = 12;
     static const int QUAD_WITH_PAIRS = 13;
+    // 看一组牌属于哪一种牌型。
     static int getCardType(const vector<int>& cards) {
         vector<int> patterns = divideIntoPatterns(cards);
         int cnt[18] = { 0 };
@@ -1167,6 +1211,7 @@ public:
         if (PatternCheck::check(cnt, emptyLast, pwp, true)) return TRIPLE_SEQUENCE_WITH_TWO_PAIRS;
         return -1;
     }
+    // 和 getCardType 类似，但输入的是“点数序列”。
     static int getCardTypeFromPoints(const vector<int>& cards) {
          
         int cnt[18] = { 0 };
@@ -1202,6 +1247,7 @@ public:
         if (PatternCheck::check(cnt, emptyLast, pwp, true)) return TRIPLE_SEQUENCE_WITH_TWO_PAIRS;
         return -1;
     }
+    // 根据点数，从手牌里找到对应的真实牌号。
     static vector<int> findCardValue(const vector<int>& handcards, const vector<int>& values) {
         vector<int> result;
         vector<int> tempHand = handcards; // 拷贝一份，用于移除已取牌
@@ -1219,11 +1265,11 @@ public:
         }
         return result;
     }
-    //是否出完牌
+    // 看手牌是不是已经空了。
     static bool isallout(const vector<int>& cards) {
         return cards.empty();
     }
-    // 获取牌的数值，0-51分别对应3-2，52是小王，53是大王
+    // 把牌号变成点数，比如 0~3 变成 3，52 变成小王，53 变成大王。
     static  int getCardValue(int card) {
         int res = 0;
         if (card >= 0 && card <= 3)res = 3;
@@ -1243,7 +1289,7 @@ public:
         else if (card == 53)res = 17; // 大王
         return res;
     }
-    // 将牌转换为数值并排序，方便后续分析
+    // 把牌号变成点数，并按从小到大排好。
     static vector<int> divideIntoPatterns(const vector<int>& cards) {
         vector<int> patterns;
         for (int card : cards) {
@@ -1252,7 +1298,7 @@ public:
         sort(patterns.begin(), patterns.end());
         return patterns;
     }
-    // 分析手牌，统计每个点数的数量，并记录出现过的点数
+    // 统计一手牌里每个点数有几张。
     static void analyzeHand(const vector<int>& hand, int cnt[18], vector<int>& uniqueVals) {
         memset(cnt, 0, sizeof(int) * 18);
         for (int card : hand) {
@@ -1264,6 +1310,7 @@ public:
             if (cnt[v] > 0) uniqueVals.push_back(v);
         }
     }
+    // 给一整手牌打分，分数越高说明这手牌通常越顺。
     static int evaluateHand(const vector<int>& hand) {
         int cnt[18] = { 0 };
         double score = 0;
@@ -1274,6 +1321,7 @@ public:
         }
         return evaluateHand(cnt);
     }
+    // 给“点数统计表”打分。
     static int evaluateHand(const int* cnt) {
 
         double score = 0;
@@ -1308,13 +1356,29 @@ public:
         if (singles <= 3) score += 5;
         return (int)score;
     }
-    static int decideBid(const vector<int>& hand, bool isFirst, bool lastTwoPassed) {
+    // 根据手牌好坏，决定叫几分。
+    static int decideBid(const vector<int>& hand, int currentMaxBid, bool isLast) {
         int score = evaluateHand(hand);
-        if (isFirst) score -= 5;
-        if (lastTwoPassed) score += 5;
-        if (score >= 35) return 3;
-        if (score >= 20) return 2;
-        if (score >= 10) return 1;
+
+        // 根据评分决定理想叫分
+        int idealBid = 0;
+        if (score >= 35) idealBid = 3;
+        else if (score >= 20) idealBid = 2;
+        else if (score >= 10) idealBid = 1;
+
+        // 如果不想叫，直接返回 0
+        if (idealBid == 0) return 0;
+
+        // 如果理想叫分大于当前最高分，且不超过 3，直接叫
+        if (idealBid > currentMaxBid && idealBid <= 3) return idealBid;
+
+        // 如果理想叫分不大于当前最高，考虑能否叫 3 分（手牌极好）
+        if (currentMaxBid < 3 && score >= 40) return 3;   // 额外预留一个高分阈值
+
+        // 如果是最后一家，且当前最高分是 0（前面两家都不叫），可以稍微积极一点
+        if (isLast && currentMaxBid == 0 && score >= 15) return 1; // 最后一家手牌还行时叫1分抢地主
+
+        // 其他情况不叫
         return 0;
     }
 };
@@ -1338,12 +1402,15 @@ const vector<int> CardPatternAnalysis::reserve_value_table[18] = {
     {52}, // 小王
     {53} // 大王
 };
-// 手牌索引类，用于快速查询和操作玩家的手牌，支持根据点数快速取牌和检查牌的数量
+// 手牌索引类。
+// 它把“牌面点数 -> 实际牌号”整理好，方便快速取牌。
+// 可以把它想成一个按点数分好的抽屉柜：要找某个点数的牌，直接去对应抽屉拿。
 class HandIndex {
     array<vector<int>, 18> valueToCards;  // 点数 -> 牌号列表
     array<int, 18> valueCount;            // 点数 -> 数量
 public:
-    // 从手牌构建索引
+    // 把一副手牌整理成“点数表”，方便后面快速找牌。
+    // 输入是牌号列表，输出是内部索引表；它不改变原始手牌，只是把牌按点数存好。
     HandIndex(const vector<int>& hand) {
         valueCount.fill(0);
         for (int card : hand) {
@@ -1353,13 +1420,15 @@ public:
         }
     }
 
-    // 检查某点数是否有至少 count 张
+    // 看某个点数是否够指定张数。
+    // 返回 true 表示可以取，false 表示这个点数的牌已经不够了。
     bool canTake(int value, int count) const {
         if (value < 3 || value > 17) return false; // 无效点数
         return valueCount[value] >= count;
     }
 
-    // 取出 count 张指定点数的牌（返回具体的牌号）
+    // 取出某个点数的牌，返回真实牌号。
+    // 这个函数会真的把牌从索引里删掉，所以它表示“拿走这些牌”。
     vector<int> takeCards(int value, int count) {
         if (!canTake(value, count)) return {};
         auto& vec = valueToCards[value];
@@ -1369,7 +1438,8 @@ public:
         return res;
     }
 
-    // 按点数序列取牌（每个点数取对应次数）
+    // 按一串点数去取牌，例如 [3,3,4]。
+    // 适合把“点数序列”变成“真实能打出的牌号序列”。
     vector<int> takeCardsByValues(const vector<int>& values) {
         int need[18] = { 0 };
         for (int v : values) {
@@ -1389,7 +1459,8 @@ public:
         return res;
     }
 
-    // 放回牌（用于撤销操作，但 MCTS 中常用状态复制，故可省略）
+    // 把牌放回索引表里。
+    // 搜索过程中经常会先试一手牌，再撤销，这个函数就是给“撤销”用的。
     void putCards(const vector<int>& cards) {
         for (int c : cards) {
             int v = CardPatternAnalysis::getCardValue(c);
@@ -1398,7 +1469,8 @@ public:
         }
     }
 
-    // 获取当前手牌总数（可选）
+    // 统计现在还有多少张牌。
+    // 只统计正常点数，不把非法值算进去。
     int totalCards() const {
         int total = 0;
         for (int i = 3; i <= 17; ++i) {
@@ -1407,10 +1479,13 @@ public:
         return total;
     }
 };
-// 游戏状态结构体，用于在博弈搜索（如Minimax）中传递和记录当前游戏状态
+// 游戏状态。
+// 这里保存当前谁出牌、谁是地主、还剩多少牌、历史出牌是什么。
+// MCTS 每往下一层搜索，都会复制一份这个状态继续推演，所以它相当于“牌局快照”。
 class GameState {
 public:
-    // 三个玩家的手牌，索引0为地主，1为农民甲，2为农民乙
+    // 保存三个人各自还剩哪些点数的牌。
+    // 数组下标是玩家编号，里面的 18 个格子表示每个点数还剩几张。
     int myhand[3][18];
     int totalCards[3];
     vector<int> publiccard;// 底牌
@@ -1424,7 +1499,9 @@ public:
     int winner; // 0:地主胜, 1:农民甲胜, 2:农民乙胜
     mutable bool Actions_cached = false;// 是否已经缓存过当前状态的合法动作
     mutable vector<vector<int>> Cache_Actions;// 缓存当前状态的合法动作，避免重复计算
-    // 构造函数，用于初始化状态
+    // 用已知信息创建一个新局面。
+    // 输入包括三家手牌、底牌、历史出牌、地主是谁、我是谁。
+    // 构造完成后，这个对象就能表示“当前局面走到哪里了”。
     GameState(const vector<int> hands_[3], const vector<int>& publiccards_, const vector<vector<int>>& history_, int landlord_role_, int my_role_)
         : publiccard(publiccards_),
         history(history_),
@@ -1443,7 +1520,8 @@ public:
         }
         
     }
-    // 状态复制构造函数，用于递归搜索
+    // 复制一个局面，方便搜索时继续往后试。
+    // 搜索树会不断分叉，所以必须经常复制状态，不能直接在原局面上改。
     GameState(const GameState& other)
         :  publiccard(other.publiccard),      // 1
       history(other.history),            // 2
@@ -1499,7 +1577,9 @@ public:
         }
         return *this;
     }
-    void applyActionInPlace(const vector<int>& action) {//状态转移函数，根据玩家的出牌动作，生成新的游戏状态
+    // 执行动作，并把局面改成下一回合。
+    // action 为空表示过牌；不为空表示真正出牌，会扣掉手牌、记入历史、再切到下一位玩家。
+    void applyActionInPlace(const vector<int>& action) {
         if (action.empty()) {// 1. 从玩家手牌中移除出牌
             this->currentPassCount++;// 过牌，增加连续过牌计数
             if (this->currentPassCount >= 2) {
@@ -1531,26 +1611,41 @@ public:
             
         }
     }
+    // 复制一份局面，再在新局面里执行动作。
+    // 这是一个“先模拟一步”的工具函数，不会影响原来的状态。
     GameState applyActionCopy(const vector<int>& action) const {
         GameState newState = *this;
         newState.applyActionInPlace(action);
         return newState;
     }
+    // 取出底牌。
+    // 这里只是读取，不会改动任何状态。
     vector<int> getPublicCard() const { return publiccard; }
+    // 取出最近一次出牌。
+    // 如果历史为空，说明当前还没有人真正出过牌。
     vector<int> getLastMove() const {
         if (!history.empty()) return history.back();
         else return {};
     }
+    // 拿到当前轮到的玩家手牌表。
+    // 返回的是“点数统计表”，后面的枚举函数会拿它来拼出所有可能动作。
     int* getCurrentPlayerHand() {
         return this->myhand[this->currentPlayer];
     }
+    // 看当前玩家是不是要“主动出牌”。
+    // 主动出牌就是没有人压着你，你可以自由选择任意合法牌型。
     bool isLeading() const {
         if (history.empty()) return true;
         else return !history.empty() && lastActionPlayer == currentPlayer;
     }
+    // 把当前玩家的点数分布复制到 cnt 里。
+    // 这样做是为了让后面的牌型枚举函数统一使用同一种数据格式。
     void copyCurrentCnt(int cnt[18]) const {
         memcpy(cnt, myhand[currentPlayer], 18 * sizeof(int));
     }
+    // 枚举当前局面下能出的所有合法牌。
+    // 输入是当前牌局快照，输出是所有可以执行的动作集合。
+    // 如果已经算过一次，就直接返回缓存结果，避免重复计算。
     vector<vector<int>> getAllActions() {
         if (Actions_cached) return Cache_Actions;
         int cnt[18];
@@ -1645,6 +1740,8 @@ public:
         Actions_cached = true;
         return allActions;
     }
+    // 牌很少的时候，直接用精确搜索判断输赢。
+    // 它不是随机模拟，而是把所有分支尽量都算一遍，适合终局附近做“精算”。
     static int exactsearch(GameState& state, int depth, int myId, int alpha, int beta) {
         if (state.isGameOver) {
             bool landlordWin = (state.winner == state.landlordRole);
@@ -1658,7 +1755,15 @@ public:
                 return a.size() < b.size();
             });
         if (actions.empty())actions.push_back({});
-        if (myId == state.currentPlayer) {
+        // 判断当前玩家是否属于我方（地主独立，农民二人同盟）
+        auto isMyTeam = [&](int player) -> bool {
+            if (myId == state.landlordRole) {
+                return player == myId;               // 我是地主，只有我是我方
+            } else {
+                return player != state.landlordRole; // 我是农民，所有农民都是我方
+            }
+        };
+        if (isMyTeam(state.currentPlayer)) {
             int value = -2;
             for (const auto& act : actions) {
                 GameState next = state.applyActionCopy(act);
@@ -1683,7 +1788,10 @@ public:
     }
 };
 //====按需生成器====//
-vector<int> getBestActionByPriority(const int* hand, const vector<int>& lastMove = {}) {
+// 这是一个“简化版出牌建议器”。
+// 它不负责全局最优，只负责在模拟阶段或兜底阶段快速给出一个还不错的动作。
+vector<int> getBestActionByPriority(const int* hand, const vector<int>& lastMove, bool isFarmer, int myCardsLeft, int minEnemyCards) {
+    // 用固定规则快速挑一个动作，通常在模拟里做兜底。
     int cnt[18];
     memcpy(cnt, hand, 18 * sizeof(int));
     vector<int> lastMovePatterns;
@@ -1691,26 +1799,74 @@ vector<int> getBestActionByPriority(const int* hand, const vector<int>& lastMove
         lastMovePatterns = lastMove;
         sort(lastMovePatterns.begin(), lastMovePatterns.end());
     }
+    if (myCardsLeft <= 2 && lastMove.empty()) {
+        // 如果只剩单张
+        for (int v = 3; v <= 17; ++v) if (cnt[v] == 1) return {v};
+        // 如果只剩对子
+        for (int v = 3; v <= 17; ++v) if (cnt[v] == 2) return {v, v};
+    }
+    if (cnt[16] >= 1 && cnt[17] >= 1 && myCardsLeft <= 4 && lastMove.empty()) {
+        return {16, 17};
+    }
+    bool mustBlock = (minEnemyCards <= 2 && !lastMove.empty());
+     if (mustBlock) {
+        int lastType = CardPatternAnalysis::getCardTypeFromPoints(lastMovePatterns);
+        vector<vector<int>> actions;
+        using EnumFunc = function<vector<vector<int>>(const int[18], const vector<int>&)>;
+        EnumFunc enumerator = nullptr;
+        switch (lastType) {
+            case CardPatternAnalysis::SINGLE: enumerator = PatternCheck::enumerateSingles; break;
+            case CardPatternAnalysis::PAIR:   enumerator = PatternCheck::enumeratePairs; break;
+            case CardPatternAnalysis::TRIPLE: enumerator = PatternCheck::enumerateTriples; break;
+            case CardPatternAnalysis::STRAIGHT: enumerator = PatternCheck::enumerateStraights; break;
+            case CardPatternAnalysis::PAIR_SEQUENCE: enumerator = PatternCheck::enumeratePairSequences; break;
+            case CardPatternAnalysis::TRIPLE_SEQUENCE: enumerator = PatternCheck::enumerateTripleSequence; break;
+            case CardPatternAnalysis::THREE_WITH_ONE: enumerator = PatternCheck::enumerateTriplesWithOne; break;
+            case CardPatternAnalysis::THREE_WITH_TWO: enumerator = PatternCheck::enumerateTriplesWithTwo; break;
+            case CardPatternAnalysis::QUAD_WITH_SINGLES: enumerator = PatternCheck::enumerateQuadWithSingles; break;
+            case CardPatternAnalysis::QUAD_WITH_PAIRS: enumerator = PatternCheck::enumerateQuadWithPairs; break;
+            case CardPatternAnalysis::TRIPLE_SEQUENCE_WITH_ONE: enumerator = PatternCheck::enumeratePlanesWithSingles; break;
+            case CardPatternAnalysis::TRIPLE_SEQUENCE_WITH_TWO_PAIRS: enumerator = PatternCheck::enumeratePlanesWithPairs; break;
+            default: break;
+        }
+        if (enumerator) {
+            actions = enumerator(cnt, lastMovePatterns);
+            if (!actions.empty()) {
+                // 选主值最大的动作
+                sort(actions.begin(), actions.end(), [](const vector<int>& a, const vector<int>& b) {
+                    return PatternCheck::getMainValueOfLastMove(a) > PatternCheck::getMainValueOfLastMove(b);
+                });
+                return actions[0];
+            }
+        }
+        // 如果没有同类型更大的牌，继续执行下面的逻辑，可能会出炸弹或过牌
+    }
+     bool canUseBomb = true;
+    if (isFarmer && !lastMove.empty()) {
+        int lastType = CardPatternAnalysis::getCardTypeFromPoints(lastMovePatterns);
+        if (lastType != CardPatternAnalysis::BOMB && lastType != CardPatternAnalysis::ROCKET)
+            canUseBomb = false;
+    }
     using CheckFunc = function<bool(CardPattern&)>;
     vector<CheckFunc> checkers = {
-        // 长套优先（不拆牌，高效跑牌）
-  [&](CardPattern& p) ->bool {Straight st; if (PatternCheck::check(cnt, lastMovePatterns, st)) { p = st; return true; } return false; },
-  [&](CardPattern& p) ->bool {PairSequence ps; if (PatternCheck::check(cnt, lastMovePatterns, ps)) { p = ps; return true; } return false; },
-  [&](CardPattern& p) ->bool {TripleSequence ts; if (PatternCheck::check(cnt, lastMovePatterns, ts)) { p = ts; return true; } return false; },
-  [&](CardPattern& p) ->bool {PlanWithSingles pws; if (PatternCheck::check(cnt, lastMovePatterns, pws)) { p = pws; return true; } return false; },
-  [&](CardPattern& p) ->bool {PlanWithPairs pwp; if (PatternCheck::check(cnt, lastMovePatterns, pwp)) { p = pwp; return true; } return false; },
-  // 带牌型
-  [&](CardPattern& p) ->bool {TripleWithOne two1; if (PatternCheck::check(cnt, lastMovePatterns, two1)) { p = two1; return true; } return false; },
-  [&](CardPattern& p) ->bool {TripleWithTwo two2; if (PatternCheck::check(cnt, lastMovePatterns, two2)) { p = two2; return true; } return false; },
-  [&](CardPattern& p) ->bool {QuadWithSingles qws; if (PatternCheck::check(cnt, lastMovePatterns, qws)) { p = qws; return true; } return false; },
-  [&](CardPattern& p) ->bool {QuadWithPairs qwp; if (PatternCheck::check(cnt, lastMovePatterns, qwp)) { p = qwp; return true; } return false; },
-  // 短牌（此时才出单/对/三）
-  [&](CardPattern& p) ->bool {Triple t; if (PatternCheck::check(cnt, lastMovePatterns, t)) { p = t; return true; } return false; },
-  [&](CardPattern& p) ->bool {Pair pr; if (PatternCheck::check(cnt, lastMovePatterns, pr)) { p = pr; return true; } return false; },
-  [&](CardPattern& p) ->bool {Single s; if (PatternCheck::check(cnt, lastMovePatterns, s)) { p = s; return true; } return false; },
-  // 保留武器（绝不轻易出）
-  [&](CardPattern& p) ->bool {Bomb b; if (PatternCheck::check(cnt, lastMovePatterns, b)) { p = b; return true; } return false; },
-  [&](CardPattern& p) ->bool {Rocket r; if (PatternCheck::check(cnt, lastMovePatterns, r)) { p = r; return true; } return false; }
+            // 长套优先（不拆牌，高效跑牌）
+    [&](CardPattern& p) ->bool {Straight st; if (PatternCheck::check(cnt, lastMovePatterns, st)) { p = st; return true; } return false; },
+    [&](CardPattern& p) ->bool {PairSequence ps; if (PatternCheck::check(cnt, lastMovePatterns, ps)) { p = ps; return true; } return false; },
+    [&](CardPattern& p) ->bool {TripleSequence ts; if (PatternCheck::check(cnt, lastMovePatterns, ts)) { p = ts; return true; } return false; },
+    [&](CardPattern& p) ->bool {PlanWithSingles pws; if (PatternCheck::check(cnt, lastMovePatterns, pws)) { p = pws; return true; } return false; },
+    [&](CardPattern& p) ->bool {PlanWithPairs pwp; if (PatternCheck::check(cnt, lastMovePatterns, pwp)) { p = pwp; return true; } return false; },
+    // 带牌型
+    [&](CardPattern& p) ->bool {TripleWithOne two1; if (PatternCheck::check(cnt, lastMovePatterns, two1)) { p = two1; return true; } return false; },
+    [&](CardPattern& p) ->bool {TripleWithTwo two2; if (PatternCheck::check(cnt, lastMovePatterns, two2)) { p = two2; return true; } return false; },
+    [&](CardPattern& p) ->bool {QuadWithSingles qws; if (PatternCheck::check(cnt, lastMovePatterns, qws)) { p = qws; return true; } return false; },
+    [&](CardPattern& p) ->bool {QuadWithPairs qwp; if (PatternCheck::check(cnt, lastMovePatterns, qwp)) { p = qwp; return true; } return false; },
+    // 短牌（此时才出单/对/三）
+    [&](CardPattern& p) ->bool {Triple t; if (PatternCheck::check(cnt, lastMovePatterns, t)) { p = t; return true; } return false; },
+    [&](CardPattern& p) ->bool {Pair pr; if (PatternCheck::check(cnt, lastMovePatterns, pr)) { p = pr; return true; } return false; },
+    [&](CardPattern& p) ->bool {Single s; if (PatternCheck::check(cnt, lastMovePatterns, s)) { p = s; return true; } return false; },
+    // 保留武器（绝不轻易出）
+    [&](CardPattern& p) ->bool { if (!canUseBomb) return false;Bomb b; if (PatternCheck::check(cnt, lastMovePatterns, b)) { p = b; return true; } return false; },
+    [&](CardPattern& p) ->bool { if (!canUseBomb) return false;Rocket r; if (PatternCheck::check(cnt, lastMovePatterns, r)) { p = r; return true; } return false; }
     };
     for (auto& check : checkers) {
         CardPattern pattern;
@@ -1823,17 +1979,32 @@ vector<int> getBestActionByPriority(const int* hand, const vector<int>& lastMove
     }
     return {};
 }
+// 粒子滤波中的一份“可能对手手牌分布”。
+// hand1 和 hand2 分别表示两个对手可能有哪些点数的牌。
+// 你可以把它理解成“一种对局猜测”：在这个猜测里，两个对手分别拿着哪些牌。
 struct OpponentParticle {
     int hand1[18];
     int hand2[18];
-};
+};//粒子滤波
 class ParticleFilter {
 public:
+    // 粒子滤波：根据历史出牌，猜测两个对手手里还剩哪些牌。
+    // 它不去追求唯一答案，而是同时保存很多个“可能的对手手牌版本”，最后再挑出更靠谱的那个。
     static constexpr int k = 100;
     static int myRole;
+    static int opp1Id;   // ← 新增：hand1 对应的绝对玩家 ID
+    static int opp2Id;   // ← 新增：hand2 对应的绝对玩家 ID
+    static vector<int> currentPool;   // 当前未分配的牌（点数）
+    static int need1, need2;          // 两个对手尚需的牌数---紧急重采样时的安全保护
     static vector<OpponentParticle> particles;
+    // 用当前局面生成一批“可能的对手手牌”。
+    // 输入是当前牌局快照，输出是一批粒子；每个粒子都代表一种可能的隐藏手牌分配。
     static void initialize(const GameState& rootState);
+    // 对手出了一手牌后，把不合理的猜测删掉。
+    // 也就是：谁能解释这手牌，谁就留下；解释不通的猜测直接淘汰。
     static void update(const vector<int>& opponentAction, int opponentId);
+    // 随机抽一个可能世界。
+    // MCTS 会在这个“猜测出来的世界”里做推演，而不是只在一个固定猜测里算。
     static OpponentParticle sample();
 };
 void ParticleFilter::initialize(const GameState& rootState) {
@@ -1863,60 +2034,88 @@ void ParticleFilter::initialize(const GameState& rootState) {
     }
     int need1 = rootState.totalCards[(rootState.myRole + 1) % 3];
     int need2 = rootState.totalCards[(rootState.myRole + 2) % 3];
-
+    if (need1 < 0) need1 = 0;
+    if (need2 < 0) need2 = 0;
+    while ((int)pool.size() < need1 + need2) pool.push_back(3);
     // 安全保护：若池子不够，强制补足（仅用于调试，实际不应发生）
     while ((int)pool.size() < need1 + need2) {
         pool.push_back(3); // 补一张最小的牌
     }
-
-    static mt19937 rng(random_device{}());
+     currentPool = pool;
+    ParticleFilter::need1 = need1;
+    ParticleFilter::need2 = need2;
+     // 设置映射关系
+    opp1Id = (rootState.myRole + 1) % 3;
+    opp2Id = (rootState.myRole + 2) % 3;
+     
     particles.clear();
-    for (int j = 0; j < k; j++) {
-        shuffle(pool.begin(), pool.end(), rng);
+    for (int j = 0; j < k; ++j) {
+        shuffle(pool.begin(), pool.end(), globalRng);
         OpponentParticle p{};
         int idx = 0;
-        for (int i = 0; i < need1; ++i) p.hand1[pool[idx++]]++;
-        for (int i = 0; i < need2; ++i) p.hand2[pool[idx++]]++;
+        // 分别填充 hand1 和 hand2，确保不越界
+        for (int i = 0; i < need1; ++i) {
+            int card = (idx < (int)pool.size()) ? pool[idx++] : 3;  // 安全取值
+            p.hand1[card]++;
+        }
+        for (int i = 0; i < need2; ++i) {
+            int card = (idx < (int)pool.size()) ? pool[idx++] : 3;
+            p.hand2[card]++;
+        }
         particles.push_back(p);
     }
 }
 void ParticleFilter::update(const vector<int>& opponentAction, int opponentId) {
-    int playedCnt[18] = { 0 };
-    for (int v : opponentAction)playedCnt[v]++;
+   int playedCnt[18] = { 0 };
+    for (int v : opponentAction) playedCnt[v]++;
     vector<OpponentParticle> survivors;
     for (auto& p : particles) {
-        int* hand = (opponentId == 1) ? p.hand1 : p.hand2;
-        bool vaild = true;
+        // 直接根据 opponentId 选择正确的 hand 数组
+        int* hand = (opponentId == opp1Id) ? p.hand1 : p.hand2;
+        bool valid = true;
         for (int v = 3; v <= 17; v++)
-            if (hand[v] < playedCnt[v]) { vaild = false; break; }
-        if (vaild)survivors.push_back(p);
+            if (hand[v] < playedCnt[v]) { valid = false; break; }
+        if (valid) survivors.push_back(p);
     }
+    // 3. 若无兼容粒子，用初始牌池紧急重采样（牌池自初始化后不再变化）
     if (survivors.empty()) {
+         
+        particles.clear();
+        for (int j = 0; j < k; ++j) {
+            vector<int> shuffled = currentPool;   // currentPool 是初始化时的剩余牌池
+            shuffle(shuffled.begin(), shuffled.end(), globalRng);
+            OpponentParticle p{};
+            int idx = 0;
+            for (int i = 0; i < need1 && idx < (int)shuffled.size(); ++i)
+                p.hand1[shuffled[idx++]]++;
+            for (int i = 0; i < need2 && idx < (int)shuffled.size(); ++i)
+                p.hand2[shuffled[idx++]]++;
+            particles.push_back(p);
+        }
         return;
     }
-    for (auto& p : survivors) {
-        int oppIdx = (opponentId - myRole + 3) % 3;
-        int* hand = (oppIdx == 1) ? p.hand1 : p.hand2;
-        for (int v = 3; v <= 17; v++)hand[v] -= playedCnt[v];
-    }
-    static mt19937 rng;
-    uniform_int_distribution<int> dist(0, survivors.size() - 1);
+     
+    // 重采样
+     
+    uniform_int_distribution<int> dist(0, (int)survivors.size() - 1);
     particles.clear();
     for (int j = 0; j < k; j++) {
-        particles.push_back(survivors[dist(rng)]);
+        particles.push_back(survivors[dist(globalRng)]);
     }
 }
 OpponentParticle ParticleFilter::sample() {
-    static mt19937 rng;
-    uniform_int_distribution<int> dist(0, k - 1);
-    return particles[dist(rng)];
+    if (particles.empty()) {
+        return OpponentParticle{};
+    }
+    int idx = randomInt(0, (int)particles.size() - 1);
+    return particles[idx];
 }
-//蒙特卡洛的实现
-//1.选择基于3个标准牌的好坏程度，历史次数最多，胜负次数，公式：score = wins/visits + C*sqrt(ln(parent_visits)/visits)+a*prior，C为调节探索程度的常数，通常取1.4
-//2.扩展：在选择的节点上随机选择一个未访问过的子节点进行扩展，添加到树中
-//3.模拟：从新扩展的节点开始，依托现有贪心策略模拟游戏直到结束，记录结果（胜利或失败）
-//4.反向传播：将模拟结果反向传播到树的节点上，更新每个节点的访问次数和胜利次数
-//5.重复以上步骤，直到达到预设的迭代次数或时间限制，最终选择访问次数最多的子节点作为决策结果(最多1000次迭代)
+// 蒙特卡洛树搜索（MCTS）。
+// 简单理解就是：先试几个动作，再把局面往后模拟，看哪个动作更容易赢。
+// 选择：用“历史表现 + 探索奖励 + 先验分数”挑最值得继续看的分支。
+// 扩展：给当前节点加一个新的孩子节点，表示尝试一种新动作。
+// 模拟：从这个新局面开始，用简化规则一直走到结束，看看最后是赢还是输。
+// 回传：把这次模拟结果一路传回父节点，更新每个节点的访问次数和胜率。
 class MCTSNode {
 public:
     GameState* state;
@@ -1929,22 +2128,27 @@ public:
     int max_score; // 用于归一化先验概率的动态常数
     // 先验概率，可以根据启发式评估函数计算得到,evaluateHand函数可以用来评估当前手牌的好坏程度，作为先验概率的一部分
     //先验概率的归一化可以通过将评估分数除以一个动态常数即每个子动作的评估分数中最大的来实现，使得先验概率在0到1之间。
-    MCTSNode(GameState& otherstate, MCTSNode* parent = nullptr, const vector<int>& action = {})
+    // 构造一个搜索节点：保存当前局面、动作和先验分数。
+    // 输入是一个 GameState，以及它在搜索树里的父节点和动作。
+    // 构造完以后，这个节点就代表“在当前局面下，走了这个动作之后会怎样”。
+    MCTSNode(GameState& otherstate, MCTSNode* parent = nullptr, const vector<int>& action = {},int ext_max_score = -1)
         : parent(parent), visits(0), wins(0), max_score(0) {
         this->state = new GameState(otherstate);
         this->action = action;
         // 计算先验分数（未归一化）
         int raw_prior = CardPatternAnalysis::evaluateHand(state->myhand[state->myRole]);
-        if (parent) {
+       if (ext_max_score >= 0) {
+        max_score = ext_max_score;                 // 使用外部统一最大值
+        } else if (parent) {
             max_score = max(parent->max_score, raw_prior);
-            prior = (max_score > 0) ? (raw_prior * 100) / max_score : 0;//------权重待调整；问题：max_score整棵树共享一个全局最大值
-        }
-        else {
+        } else {
             max_score = raw_prior;
-            prior = (max_score > 0) ? (raw_prior * 100) / max_score : 0;
         }
+    prior = (max_score > 0) ? (raw_prior * 100) / max_score : 0;
     }
 
+    // 节点销毁时，把子节点一起释放。
+    // 这样可以避免搜索树结束后还残留一堆没释放的内存。
     ~MCTSNode() {
         delete state;
         for (MCTSNode* child : children) {
@@ -1952,7 +2156,8 @@ public:
         }
     }
 
-    // 选择子节点，基于UCB1.0公式 UBC =  exploit + explore + a*prior
+    // 从孩子节点里挑一个最值得继续往下搜的。
+    // 它会同时看“赢得多不多”“试得够不够多”“先验分数高不高”。
     MCTSNode* selectChild(double C = 1.4) {
         MCTSNode* bestChild = nullptr;
         double bestScore = -1e9;
@@ -1968,8 +2173,8 @@ public:
         return bestChild;
     }
 
-    // 扩展子节点
-    //贪心策略和随机策略结合，优先扩展评估分数较高的动作，但也保留一定的随机性以增加探索
+    // 从当前节点往下多加一个新孩子。
+    // 这个步骤就是“扩展”：先把还没试过的动作拿出来，再选一个最有希望的动作建成子节点。
     void expand() {
         vector<vector<int>> legalActions = state->getAllActions();//待优化，getAllActions函数内部完整枚举，多次调用导致重复计算
         //剔除已经扩展过的动作
@@ -1985,17 +2190,31 @@ public:
             if (!tried) untried.push_back(action);
         }
         if (untried.empty()) return; // 没有未尝试的动作了,隐藏问题：没有合法动作时调用方不知
-        //随机选择一个未尝试的动作进行扩展
-        int idx = rand() % untried.size();//问题：untried动作的选择随机效率低，预计策略：对untried动作进行评分，选择评分较小的动作优先选择（添加新参量）
-        vector<int> action = untried[idx];
-        GameState newState = state->applyActionCopy(action);
-        MCTSNode* child = new MCTSNode(newState, this, action);
+        vector<int> scores(untried.size());
+        int max_score = 0;
+        for (size_t i = 0; i < untried.size(); ++i) {
+            GameState temp = state->applyActionCopy(untried[i]);
+            scores[i] = CardPatternAnalysis::evaluateHand(temp.myhand[temp.myRole]);
+            if (scores[i] > max_score) max_score = scores[i];
+        }
+        if (max_score == 0) max_score = 1;
+
+        // 按分数从高到低排序，优先扩展最高分的动作
+        vector<int> idx(untried.size());
+        iota(idx.begin(), idx.end(), 0);
+        sort(idx.begin(), idx.end(), [&](int a, int b) { return scores[a] > scores[b]; });
+
+        // 只扩展分数最高的一个动作（也可以扩展前几个，但不要全部）
+        int bestIdx = idx[0];
+        GameState newState = state->applyActionCopy(untried[bestIdx]);
+        MCTSNode* child = new MCTSNode(newState, this, untried[bestIdx], max_score);
         children.push_back(child);
 
     }
 
 
-    // 模拟游戏直到结束，返回结果（胜利或失败）
+    // 用简化规则把牌局往后走到结束，看看结果好不好。
+    // 这是 MCTS 里的“模拟”阶段：它不追求绝对准确，只追求快，而且能大致反映这个动作值不值得。
     bool simulate() {
         GameState simState = *state;
         if (isUseExactSearch(simState)) {
@@ -2004,27 +2223,27 @@ public:
             return result == 1;
         }
         const double EPSILON = 0.1; // 10% 概率随机
-        static mt19937 rng(chrono::steady_clock::now().time_since_epoch().count());
         uniform_real_distribution<double> dist(0.0, 1.0);
         const int MAX_SIM_STEPS = 200;
         int stepCount = 0;
         while (!simState.isGameOver && stepCount < MAX_SIM_STEPS) {
             stepCount++;
             vector<int> action;
-            if (dist(rng) < EPSILON) {
+            if (dist(globalRng)< EPSILON) {
                 // 以一定概率选择一个随机合法动作，增加探索
                 vector<vector<int>> legalActions = simState.getAllActions();
                 if (!legalActions.empty()) {
-                    int randomIdx = rng() % legalActions.size();
+                    int randomIdx = randomInt(0, legalActions.size() - 1);
                     simState.applyActionInPlace(legalActions[randomIdx]);
                 }
             }
             else {
+                int enemy=min(simState.totalCards[(simState.currentPlayer+1)%3], simState.totalCards[(simState.currentPlayer+2)%3]);
                 if (simState.isLeading()) {
-                    action = getBestActionByPriority(simState.getCurrentPlayerHand());
+                    action = getBestActionByPriority(simState.getCurrentPlayerHand(), {}, simState.myRole != simState.landlordRole, simState.totalCards[simState.currentPlayer], enemy);
                 }
                 else {
-                    action = getBestActionByPriority(simState.getCurrentPlayerHand(), simState.getLastMove());
+                    action = getBestActionByPriority(simState.getCurrentPlayerHand(), simState.getLastMove(), simState.myRole != simState.landlordRole, simState.totalCards[simState.currentPlayer], enemy);
                 }
                 if (action.empty())action = {};
                 simState.applyActionInPlace(action);
@@ -2039,14 +2258,16 @@ public:
         return landlordWin == iAmLandlord;
     }
 
-    // 反向传播结果
+    // 把这次模拟结果往上反馈给父节点。
+    // 如果这次模拟是赢，路径上的节点就都记一次“赢”；如果输了，就记一次“没赢”。
     void backpropagate(double result) {
         visits++;
         wins += result;
         if (parent) parent->backpropagate(result);
     }
 
-    // ADDED: 判断节点是否已经完全扩展（所有合法动作都已生成子节点）
+    // 看当前节点的所有合法动作是不是都已经试过了。
+    // 如果还有没试过的动作，就说明这个节点还可以继续扩展。
     bool isFullyExpanded() const {
         if (state->isGameOver) return true;   // 终局节点无需扩展
         vector<vector<int>> legalActions = state->getAllActions();
@@ -2064,7 +2285,8 @@ public:
         return true;
     }
 
-    // ADDED: 获取胜率最高的子节点（用于最终决策）
+    // 找到目前看起来最容易赢的孩子。
+    // 这里看的是胜率，不是访问次数，所以更像“最终答案”而不是“继续探索的答案”。
     MCTSNode* bestChild() const {
         MCTSNode* best = nullptr;
         double bestWinRate = -1.0;
@@ -2080,20 +2302,24 @@ public:
         return best;
     }
 
-    // ADDED: 获取最优动作（最终返回给外部的出牌）
+    // 取出当前节点对应的最佳动作。
+    // 如果没有孩子，就返回空动作，表示过牌或者没有可用分支。
     vector<int> getBestAction() const {
         MCTSNode* best = bestChild();
         if (best) return best->action;
         return {};   // 无合法动作时返回空（过牌）
     }
 
-    // ADDED: 执行一次完整的 MCTS 迭代（选择->扩展->模拟->回溯）
+    // 做一次完整的 MCTS：往下选、扩展、模拟、回传结果。
+    // 这是 MCTS 的一整轮工作，重复很多次之后，树就会越来越接近“哪个动作更好”的答案。
     void iterate() {
         MCTSNode* node = this;
         while (!node->state->isGameOver && node->isFullyExpanded()) {
             node = node->selectChild();
             if (!node) break;   // 安全保护
         }
+
+        if (!node) return;
 
         if (!node->state->isGameOver) {
             node->expand();
@@ -2104,41 +2330,26 @@ public:
         bool win = node->simulate();
         node->backpropagate(win ? 1.0 : 0.0);
     }
+    // 牌很少时，直接用精确搜索，不再靠随机模拟。
+    // 这是一个“该算清楚的时候就算清楚”的开关，避免在小残局里还靠蒙。
     bool isUseExactSearch(const GameState& s) {
         int total = s.totalCards[0] + s.totalCards[1] + s.totalCards[2];
         return total <= 6 && s.totalCards[s.currentPlayer] <= 3;
     }
 
 };
+
+
 vector<int> decideWithParticleFilter(GameState& rootState, int timeMs = 900) {
-    for(int i=0;i<3;i++){
-        cerr << "My hand for player " << i << ": ";
-        for (int v = 3; v <= 17; v++) {
-            for (int c = 0; c < rootState.myhand[i][v]; c++) {
-                cerr << v << " ";
-            }
+    // 最终决策入口：先猜对手手牌，再对多个可能局面跑 MCTS，最后合并结果。
+    int minEnemy = min(rootState.totalCards[(rootState.currentPlayer + 1) % 3], rootState.totalCards[(rootState.currentPlayer + 2) % 3]);
+    if (ParticleFilter::particles.empty()) {
+        if (rootState.isLeading()) {
+            return getBestActionByPriority(rootState.getCurrentPlayerHand(), {}, rootState.myRole != rootState.landlordRole, rootState.totalCards[rootState.currentPlayer], minEnemy);
         }
-        cerr << endl;
+        return getBestActionByPriority(rootState.getCurrentPlayerHand(), rootState.getLastMove(), rootState.myRole != rootState.landlordRole, rootState.totalCards[rootState.currentPlayer], minEnemy);
     }
-    for(int i=0;i<rootState.history.size();i++){
-        cerr << "History action " << i << ": ";
-        for (int v : rootState.history[i]) {
-            cerr << v << " ";
-        }
-        cerr << endl;
-    }
-    for(int i=0;i<3;i++){
-        cerr << "Total cards for player " << i << ": " << rootState.totalCards[i] << endl;
-    }
-    cerr << "Current player: " << rootState.currentPlayer << endl;
-    cerr << "Landlord player: " << rootState.landlordRole << endl;
-    cerr << "Is leading: " << rootState.isLeading() << endl;
-    cerr << "Last move: ";
-    for (int v : rootState.getLastMove()) {
-        cerr << v << " ";
-    }
-    cerr << endl;
-    
+
     int N_Worlds = 10;
     int itersPerWorld = 1500;
     vector<int> bestAction;
@@ -2158,26 +2369,18 @@ vector<int> decideWithParticleFilter(GameState& rootState, int timeMs = 900) {
         worldState.totalCards[opp1] = std::accumulate(p.hand1 + 3, p.hand1 + 18, 0);
         worldState.totalCards[opp2] = std::accumulate(p.hand2 + 3, p.hand2 + 18, 0);
         MCTSNode rootNode(worldState);
-        // for(int i=0;i<3;i++){
-        // cerr << "My hand for player " << i << ": ";
-        // for (int v = 3; v <= 17; v++) {
-        //     for (int c = 0; c < worldState.myhand[i][v]; c++) {
-        //         cerr << v << " ";
-        //     }
-        // }
-        // cerr << endl;
-    
         auto worldDeadline = chrono::steady_clock::now() + chrono::milliseconds(timeMs / N_Worlds);
         while (chrono::steady_clock::now() < worldDeadline) {
             rootNode.iterate();
             ++totalSims;
         }
+        
         for (MCTSNode* child : rootNode.children) {
             actionVisits[child->action] += child->visits;
             actionWins[child->action] += child->wins;
         }
     }
-    //   cerr << "Total simulations: " << totalSims << endl;
+       cerr << "Total simulations: " << totalSims << endl;
     for (auto& [act, visits] : actionVisits) {
         if (visits == 0) continue;
         double rate = actionWins[act] / (double)visits;
@@ -2190,7 +2393,16 @@ vector<int> decideWithParticleFilter(GameState& rootState, int timeMs = 900) {
 }
 int ParticleFilter::myRole = 0;              // 定义（分配内存）
 vector<OpponentParticle> ParticleFilter::particles;
+int ParticleFilter::opp1Id = -1;   // 初始化为 -1，后续在 initialize 中设置
+int ParticleFilter::opp2Id = -1;
+int ParticleFilter::need1 = -1;
+int ParticleFilter::need2 = -1;
+vector<int> ParticleFilter::currentPool;
+
+// ---------- 主函数入口 ----------//
+// 这里负责三件事：读入 Botzone 的 JSON、还原当前牌局、输出我们这一步要出的牌。
 int main() {
+    auto start = chrono::steady_clock::now();
     string line, all;
     while (getline(cin, line)) all += line;
     Json::Reader reader;
@@ -2204,22 +2416,31 @@ int main() {
     Json::Value request = input["requests"][turnID];
 
     // ---------- 叫牌阶段 ----------
+    // 如果这轮是叫分阶段，就不做出牌搜索，只根据手牌好坏决定叫几分。
     if (request.isMember("bid")) {
-        // 获取当前手牌（叫牌阶段 own 字段存在）
-        vector<int> hand;
+         vector<int> hand;
         if (request.isMember("own")) {
             for (Json::UInt i = 0; i < request["own"].size(); ++i)
                 hand.push_back(request["own"][i].asInt());
         }
-        // 获取叫牌历史
+
         vector<int> bidHistory;
         if (request["bid"].isArray()) {
             for (Json::UInt i = 0; i < request["bid"].size(); ++i)
                 bidHistory.push_back(request["bid"][i].asInt());
         }
-        bool isFirst = bidHistory.empty();
-        bool lastTwoPassed = (bidHistory.size() >= 2 && bidHistory[0] == 0 && bidHistory[1] == 0);
-        int bid = CardPatternAnalysis::decideBid(hand, isFirst, lastTwoPassed);
+
+        // 计算当前最高叫分
+        // 这样就知道我们是不是有机会超过别人。
+        int currentMaxBid = 0;
+        for (int b : bidHistory) if (b > currentMaxBid) currentMaxBid = b;
+
+        // 是否是最后一个叫分玩家（即2号玩家）
+        // 最后一个叫分的人可以根据前面两家的结果，稍微调整策略。
+        bool isLast = (bidHistory.size() == 2);
+
+        int bid = CardPatternAnalysis::decideBid(hand, currentMaxBid, isLast);
+
         Json::Value ret;
         ret["response"] = bid;
         ret["data"] = input["data"];
@@ -2229,14 +2450,16 @@ int main() {
     }
 
 // ---------- 出牌阶段 ----------
+// 叫牌结束后，就进入真正的出牌阶段：先把历史复原出来，再让搜索器决定这一手怎么打。
 vector<int> fullHand;            // 自己初始完整手牌（含底牌）
 vector<int> publicCard;
 int myPosition = -1, landlordPosition = -1;
 
-// 1. 提取公共信息
+int firstPlayReq = -1;// 从请求序列里找到第一条真正开始出牌的请求，方便还原整个牌局。
 for (int i = 0; i <= turnID; ++i) {
     Json::Value req = input["requests"][i];
     if (req.isMember("publiccard") && req.isMember("landlord")) {
+        if (firstPlayReq == -1) firstPlayReq = i;
         landlordPosition = req["landlord"].asInt();
         myPosition = req["pos"].asInt();
         publicCard.clear();
@@ -2253,88 +2476,136 @@ for (int i = 0; i <= turnID; ++i) {
 }
  
  
- 
-// 2. 收集所有真实动作序列 (allMoves) 与 自己已出的牌 (myPlayed)
-vector<vector<int>> allMoves;   // 按实际出牌顺序的点数序列（空数组为过牌）
-vector<int> myPlayed;           // 自己已出的牌ID列表
+// 2. 收集动作序列
+// 这里把历史动作按时间顺序整理出来，后面会按这个顺序重放到 GameState 里。
+vector<vector<int>> allMoves;
+vector<int> myPlayed;           // 自己打出的牌ID
+vector<int> movePlayers;        // 对应 allMoves 中每个动作的玩家
+int simPlayer = landlordPosition; // 当前轮到谁（地主开始）
+bool firstRealMove = false;
 
-for (int i = 1; i < turnID; ++i) {
+// 地主视角手动补第一手出牌（仅当已经出过牌时）
+// 这是为了处理 Botzone 历史里“第一手动作”和“当前请求”之间的时间顺序差异。
+if (myPosition == landlordPosition && turnID >= 2) {
+    Json::Value firstResp = input["responses"][1];
+    if (firstResp.isArray() && firstResp.size() > 0) {
+        vector<int> move;
+        for (Json::UInt j = 0; j < firstResp.size(); ++j) {
+            int card = firstResp[j].asInt();
+            move.push_back(CardPatternAnalysis::getCardValue(card));
+            myPlayed.push_back(card);
+        }
+        allMoves.push_back(move);
+    } else {
+        allMoves.push_back({});        // 保险
+    }
+    movePlayers.push_back(landlordPosition);
+    simPlayer = (landlordPosition + 1) % 3;
+    firstRealMove = true;
+}
+
+for (int i = firstPlayReq; i <= turnID; ++i) {
     Json::Value req = input["requests"][i];
     Json::Value hist = req["history"];
-    bool skip = req.isMember("publiccard") && hist[0u].empty() && hist[1u].empty();
-    if (!skip) {
-         
-        for (int k = 0; k <2; k++) {
-            vector<int> move;
-            for (Json::UInt j = 0; j < hist[k].size(); ++j) {
-                int card = hist[k][j].asInt();
-                move.push_back(CardPatternAnalysis::getCardValue(card));
-            }
-            
-            allMoves.push_back(move);
+
+    // 跳过地主首回合全空占位请求
+    // 这条记录只是占位，不是真正的历史动作。
+    bool isFirstReq = (req.isMember("publiccard") && hist[0u].empty() && hist[1u].empty());
+    if (isFirstReq) continue;
+
+    // 处理上上家、上家
+    // Botzone 的 history 里通常会给出最近两家的动作，这里按时间顺序还原成标准历史。
+    for (int k = 0; k < 2; ++k) {
+        // 跳过首个占位空（农民首次请求的 history[0] 为空占位）
+        if (!firstRealMove && k == 0 && hist[0u].empty() && !hist[1u].empty()) {
+            continue;
         }
-    }
-    // 自己的响应
-    Json::Value resp = input["responses"][i];
-    if (resp.isArray() && resp.size() > 0) {
         vector<int> move;
-        for (Json::UInt j = 0; j < resp.size(); ++j) {
-            int card = resp[j].asInt();
+        for (Json::UInt j = 0; j < hist[k].size(); ++j) {
+            int card = hist[k][j].asInt();
             move.push_back(CardPatternAnalysis::getCardValue(card));
-            myPlayed.push_back(card);   // 记录自己打出的牌
         }
         allMoves.push_back(move);
-    } else {
-        allMoves.push_back({});
+        movePlayers.push_back(simPlayer);
+        simPlayer = (simPlayer + 1) % 3;
+        if (!move.empty()) firstRealMove = true;
+    }
+
+    // 已完成回合中目标玩家的响应（i < turnID）
+    // 这里把已经结算完的响应也补进历史里，保证局面可以完整回放。
+    if (i < turnID) {
+        // 避免地主首出被重复收集（已手动补过）
+        if (myPosition == landlordPosition && i == firstPlayReq && turnID >= 2) {
+            // 跳过，因为已经通过手动补牌加入
+        } else {
+            Json::Value resp = input["responses"][i];
+            if (resp.isArray() && resp.size() > 0) {
+                vector<int> move;
+                for (Json::UInt j = 0; j < resp.size(); ++j) {
+                    int card = resp[j].asInt();
+                    move.push_back(CardPatternAnalysis::getCardValue(card));
+                    if (simPlayer == myPosition) myPlayed.push_back(card);
+                }
+                allMoves.push_back(move);
+            } else {
+                allMoves.push_back({});   // 过牌
+            }
+            movePlayers.push_back(simPlayer);
+            simPlayer = (simPlayer + 1) % 3;
+            if (!allMoves.back().empty()) firstRealMove = true;
+        }
     }
 }
 
-// 当前请求的 history（尚未执行自己的响应）
-bool curPlaceholder = request.isMember("publiccard") &&
-                      request["history"][0u].empty() &&
-                      request["history"][1u].empty();
-if (!curPlaceholder) {
-    Json::Value hist = request["history"];
-    // 时间顺序：先 history[1] 后 history[0]
-    // 但 turnID==0 时 history[0] 是占位符，此时只有 history[1] 真实
-    if (turnID == 0 && hist[0u].empty() && !hist[1u].empty()) {
-        vector<int> move;
-        for (Json::UInt j = 0; j < hist[1u].size(); ++j) {
-            int card = hist[1u][j].asInt();
-            move.push_back(CardPatternAnalysis::getCardValue(card));
-        }
-        allMoves.push_back(move);
-    } else {
-        for (int k = 0; k <2; k++) {
-            vector<int> move;
-            for (Json::UInt j = 0; j < hist[k].size(); ++j) {
-                int card = hist[k][j].asInt();
-                move.push_back(CardPatternAnalysis::getCardValue(card));
-            }
-            allMoves.push_back(move);
-        }
-    }
-}
- // 农民首次请求时，删除 allMoves 中的占位空动作
-if (myPosition == 1&& !allMoves.empty() && allMoves[0].empty())
-    allMoves.erase(allMoves.begin());
+
+// // 当前请求的 history（尚未执行自己的响应）
+// bool curPlaceholder = request.isMember("publiccard") &&
+//                       request["history"][0u].empty() &&
+//                       request["history"][1u].empty();
+// if (!curPlaceholder) {
+//     Json::Value hist = request["history"];
+//     // 时间顺序：先 history[1] 后 history[0]
+//     // 但 turnID==0 时 history[0] 是占位符，此时只有 history[1] 真实
+//     if (turnID == 0 && hist[0u].empty() && !hist[1u].empty()) {
+//         vector<int> move;
+//         for (Json::UInt j = 0; j < hist[1u].size(); ++j) {
+//             int card = hist[1u][j].asInt();
+//             move.push_back(CardPatternAnalysis::getCardValue(card));
+//         }
+//         allMoves.push_back(move);
+//     } else {
+//         for (int k = 0; k <2; k++) {
+//             vector<int> move;
+//             for (Json::UInt j = 0; j < hist[k].size(); ++j) {
+//                 int card = hist[k][j].asInt();
+//                 move.push_back(CardPatternAnalysis::getCardValue(card));
+//             }
+//             allMoves.push_back(move);
+//         }
+//     }
+// }
+ // 农民甲首次请求时，删除 allMoves 中的占位空动作
+// if (myPosition == 1&& !allMoves.empty() && allMoves[0].empty())
+//     allMoves.erase(allMoves.begin());
 // 3. 生成自己当前手牌（用于构造我的初始手牌，传给 GameState）
+// 这是“我现在还剩什么牌”的真实版本：先拿到完整手牌，再把我已经打出去的牌删掉。
 vector<int> myCurrentHand = fullHand;
 for (int c : myPlayed) {
     auto it = find(myCurrentHand.begin(), myCurrentHand.end(), c);
     if (it != myCurrentHand.end()) myCurrentHand.erase(it);
 }
-int k=1;
-for(auto& move:allMoves){
-    cerr << "Move"<<k++<<":";
-    for(int c:move){
-        cerr << c << " ";
-    }
-    cerr << endl;
-}
+// int k=1;
+// for(auto& move:allMoves){
+//     cerr << "Move"<<k++<<":";
+//     for(int c:move){
+//         cerr << c << " ";
+//     }
+//     cerr << endl;
+// }
 
 // 4. 构造 GameState 并重放历史
-// 对手手牌未知，暂时给空
+// 对手手牌未知，暂时给空。
+// 先建一个“空白牌局快照”，再把历史动作一条条放进去，最后就得到当前真实局面。
 vector<int> initHands[3];
 initHands[myPosition] = fullHand;
 initHands[(myPosition + 1) % 3] = {};
@@ -2343,6 +2614,7 @@ vector<vector<int>> emptyHistory;
 GameState rootState(initHands, publicCard, emptyHistory, landlordPosition, myPosition);
 
 // 设置对手总牌数（初始17/20，后续 apply 会扣除）
+// 这一步是为了让状态知道：每个人当前大概还剩多少张牌。
 for (int p = 0; p < 3; ++p) {
     if (p == myPosition) continue;
     rootState.totalCards[p] = (p == landlordPosition) ? 20 : 17;
@@ -2351,16 +2623,18 @@ for (int p = 0; p < 3; ++p) {
 for(const auto& move : allMoves) {
     rootState.applyActionInPlace(move);
 }
-cerr<<rootState.currentPlayer<<endl;
-cerr<<"Last move in rootState: ";
-for(int c:rootState.getLastMove()){
-    cerr << c << " ";
-}cerr << endl;
 
 // 5. 粒子滤波初始化（它会根据 rootState 的已知信息生成粒子）
+// 然后再根据对手已经出的牌筛掉不合理的猜测，最后在剩下的猜测里跑 MCTS。
 ParticleFilter::myRole = myPosition;
 ParticleFilter::initialize(rootState);
-
+// for (size_t idx = 0; idx < allMoves.size(); ++idx) {
+//     int player = movePlayers[idx];
+//     if (player != myPosition && !allMoves[idx].empty()) {
+//         ParticleFilter::update(allMoves[idx], player);
+//     }
+// }
+// 如果现在还没轮到我，就直接返回空动作。
 if (rootState.currentPlayer != myPosition) {
     Json::Value ret;
     ret["response"] = Json::arrayValue;
@@ -2370,7 +2644,9 @@ if (rootState.currentPlayer != myPosition) {
     return 0;
 }
 
-vector<int> bestAction = decideWithParticleFilter(rootState, 900);
+// 真正决定这一手怎么打。
+vector<int> bestAction = decideWithParticleFilter(rootState, 880);
+// 搜索器给的是“点数序列”，Botzone 要的是“具体牌号”，所以这里要把点数映射回真实牌。
 vector<int> cardMove;
 vector<int> tempHand = myCurrentHand;
 for (int val : bestAction) {
@@ -2386,6 +2662,8 @@ for (int val : bestAction) {
     }
 }
 
+// 结束时把结果打包成 JSON 输出。
+// response 里放的是具体牌号列表，data 原样带回去，方便 Botzone 保留会话信息。
 Json::Value ret;
 Json::Value output(Json::arrayValue);
 for (int c : cardMove) output.append(c);
@@ -2393,6 +2671,8 @@ ret["response"] = output;
 ret["data"] = input["data"];
 Json::FastWriter writer;
 cout << writer.write(ret) << endl;
+auto elapsed = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - start).count();
+cerr << "Elapsed time: " << elapsed << " ms" << endl;
 return 0;
 }
 //// 根据点数返回该点数的第一张牌ID（0-53）
