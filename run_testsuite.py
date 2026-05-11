@@ -41,6 +41,14 @@ def main():
                         help="测试游戏局数（默认: 10）")
     parser.add_argument("--bot", "-b", type=str, default=None,
                         help="Bot可执行文件路径（默认: my_bot.exe）")
+    parser.add_argument("--bot0", type=str, default=None,
+                        help="玩家0的Bot可执行文件路径")
+    parser.add_argument("--bot1", type=str, default=None,
+                        help="玩家1的Bot可执行文件路径")
+    parser.add_argument("--bot2", type=str, default=None,
+                        help="玩家2的Bot可执行文件路径")
+    parser.add_argument("--bot-names", type=str, nargs=3, default=None,
+                        help="三个Bot的显示名称（如 my_bot2 adp adp）")
     parser.add_argument("--seed", "-s", type=int, default=None,
                         help="随机种子（指定后可复现测试）")
     parser.add_argument("--timeout", "-t", type=float, default=None,
@@ -66,6 +74,16 @@ def main():
         if not os.path.isabs(bot_path):
             bot_path = os.path.join(PROJECT_ROOT, bot_path)
         config["bot_path"] = bot_path
+    bot_paths = [args.bot0, args.bot1, args.bot2]
+    if any(path is not None for path in bot_paths):
+        resolved = []
+        for path in bot_paths:
+            if path is None:
+                path = args.bot if args.bot is not None else DEFAULT_CONFIG["bot_path"]
+            if not os.path.isabs(path):
+                path = os.path.join(PROJECT_ROOT, path)
+            resolved.append(path)
+        config["bot_paths"] = resolved
     if args.seed is not None:
         config["seed"] = args.seed
     if args.timeout is not None:
@@ -76,13 +94,18 @@ def main():
         config["log_dir"] = args.output
     if args.no_console:
         config["log_to_console"] = False
+    if args.bot_names:
+        config["bot_names"] = args.bot_names
 
     # 打印配置信息
     print("=" * 50)
     print("斗地主Bot测试套件")
     print("=" * 50)
     print(f"工作目录: {PROJECT_ROOT}")
-    print(f"Bot路径: {config.get('bot_path', DEFAULT_CONFIG['bot_path'])}")
+    if "bot_paths" in config:
+        print(f"Bot路径: {config['bot_paths']}")
+    else:
+        print(f"Bot路径: {config.get('bot_path', DEFAULT_CONFIG['bot_path'])}")
     print(f"测试局数: {config.get('num_games', DEFAULT_CONFIG['num_games'])}")
     print(f"超时时间: {config.get('bot_timeout', DEFAULT_CONFIG['bot_timeout'])}秒")
     print(f"随机种子: {config.get('seed', '随机')}")

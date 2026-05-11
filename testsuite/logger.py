@@ -8,6 +8,28 @@ import logging
 from datetime import datetime
 from .config import DEFAULT_CONFIG
 
+# 花色符号映射（用于处理终端编码问题）
+SUIT_MAP = {
+    '\u2660': '[黑桃]',  # ♠
+    '\u2665': '[红桃]',  # ♥
+    '\u2666': '[方块]',  # ♦
+    '\u2663': '[梅花]',  # ♣
+}
+
+def safe_console_output(msg):
+    """安全输出到控制台，处理编码问题"""
+    if sys.platform.startswith('win'):
+        try:
+            # 尝试直接输出
+            return msg
+        except UnicodeEncodeError:
+            # 如果编码失败，替换花色符号
+            result = msg
+            for char, replacement in SUIT_MAP.items():
+                result = result.replace(char, replacement)
+            return result
+    return msg
+
 
 class TestLogger:
     """测试日志管理器"""
@@ -48,6 +70,29 @@ class TestLogger:
             ch = logging.StreamHandler(sys.stdout)
             ch.setLevel(getattr(logging, self.config.get("log_level", "INFO")))
             ch.setFormatter(formatter)
+            
+            # 添加过滤器处理Windows终端编码问题
+            class SafeConsoleFilter(logging.Filter):
+                def filter(self, record):
+                    record.msg = self.safe_console_output(record.msg)
+                    return True
+                
+                def safe_console_output(self, msg):
+                    """安全输出到控制台，处理Windows终端编码问题"""
+                    if sys.platform.startswith('win'):
+                        SUIT_MAP = {
+                            '\u2660': '[黑桃]',
+                            '\u2665': '[红桃]',
+                            '\u2666': '[方块]',
+                            '\u2663': '[梅花]',
+                        }
+                        result = msg
+                        for char, replacement in SUIT_MAP.items():
+                            result = result.replace(char, replacement)
+                        return result
+                    return msg
+            
+            ch.addFilter(SafeConsoleFilter())
             logger.addHandler(ch)
 
         return logger
@@ -72,6 +117,9 @@ class TestLogger:
             if self.config.get("log_to_console", True):
                 ch = logging.StreamHandler(sys.stdout)
                 ch.setLevel(logging.INFO)
+                # 设置控制台编码
+                if hasattr(ch.stream, 'buffer'):
+                    ch.stream = sys.stdout
                 ch.setFormatter(logging.Formatter("[游戏%(game_id)04d] %(message)s"))
                 logger.addHandler(ch)
 

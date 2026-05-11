@@ -19,7 +19,8 @@ class GameJudge:
     """
 
     def __init__(self, bot_runners: List[BotRunner], config: dict,
-                 seed: int = None, game_id: int = 0, logger=None):
+                 seed: int = None, game_id: int = 0, logger=None,
+                 bot_names=None):
         """
         Args:
             bot_runners: 三个Bot执行器列表 [runner0, runner1, runner2]
@@ -27,12 +28,14 @@ class GameJudge:
             seed: 随机种子
             game_id: 游戏编号
             logger: 日志器
+            bot_names: 三个Bot的简化名列表
         """
         self.bot_runners = bot_runners
         self.config = config
         self.seed = seed
         self.game_id = game_id
         self.logger = logger
+        self.bot_names = bot_names if bot_names else ["Bot", "Bot", "Bot"]
 
         # 游戏状态
         self.hands = [[], [], []]       # 三个玩家的当前手牌（牌号）
@@ -53,6 +56,7 @@ class GameJudge:
         # 当连续两人过牌（pass_count>=2）时，重置周期
         # 用于正确构建 history[0] 和 history[1]
         self._last_play_in_round = [[], [], []]  # 每个玩家本轮最后一次出牌
+        self._pass_cycle_reset = False            # 过牌周期重置标记
 
         # 每个Bot的独立通信数据
         self.bot_requests = [[], [], []]     # 每个Bot的请求列表
@@ -88,13 +92,14 @@ class GameJudge:
         return sorted(card_to_rank(c) for c in cards)
 
     def _player_name(self, player: int) -> str:
+        bot_name = self.bot_names[player] if player < len(self.bot_names) else "Bot"
         status = ""
         if self.player_crashed[player]:
             status = "(已崩溃-简单Bot)"
         elif player == self.landlord:
-            status = "(Bot-地主)"
+            status = f"({bot_name}-地主)"
         else:
-            status = "(Bot-农民)"
+            status = f"({bot_name}-农民)"
         return f"玩家{player}{status}"
 
     def init_game(self):
@@ -122,7 +127,7 @@ class GameJudge:
 
         self.bot_requests[player].append(bid_request)
         runner = self.bot_runners[player]
-        result = runner.call_bot(self.bot_requests[player], self.bot_responses[player], self.bot_data[player])
+        result = runner.call_bot(self.bot_requests[player], self.bot_responses[player], self.bot_data[player], self.game_id, player)
 
         self.bot_total_calls[player] += 1
         self.bot_total_time[player] += result.time_used
@@ -155,7 +160,7 @@ class GameJudge:
                 if pc in orig_hand:
                     orig_hand.remove(pc)
         return {
-            "history": [[], []],
+            "history": self._get_history_for_bot(player),
             "publiccard": self.public_cards,
             "own": orig_hand,
             "landlord": self.landlord,
@@ -199,7 +204,7 @@ class GameJudge:
             request = {"history": self._get_history_for_bot(player)}
 
         self.bot_requests[player].append(request)
-        result = runner.call_bot(self.bot_requests[player], self.bot_responses[player], self.bot_data[player])
+        result = runner.call_bot(self.bot_requests[player], self.bot_responses[player], self.bot_data[player], self.game_id, player)
 
         self.bot_total_calls[player] += 1
         self.bot_total_time[player] += result.time_used
@@ -232,7 +237,9 @@ class GameJudge:
 
     def _is_valid_play(self, player: int, cards: list) -> bool:
         if not cards:
-            return True
+            if self.last_move and self.last_move_player != player:
+                return True
+            return False
 
         hand_copy = self.hands[player][:]
         for c in cards:
@@ -257,9 +264,49 @@ class GameJudge:
                     return card_to_rank(cards[0]) > card_to_rank(self.last_move[0])
         return True
 
+    def _describe_invalid_play(self, player: int, cards: list) -> str:
+        if not cards:
+            return "空出牌"
+
+        hand_copy = self.hands[player][:]
+        missing_cards = []
+        for c in cards:
+            if c in hand_copy:
+                hand_copy.remove(c)
+            else:
+                missing_cards.append(c)
+
+        if missing_cards:
+            return f"包含不在手牌中的牌: {', '.join(card_to_str(c) for c in missing_cards)}"
+
+        if self.last_move and self.last_move_player != player and self.last_move_player != -1:
+            last_move_cards = ', '.join(card_to_str(c) for c in self.last_move)
+            current_cards = ', '.join(card_to_str(c) for c in cards)
+
+            if len(cards) != len(self.last_move):
+                is_bomb = (len(cards) == 4 and len(set(card_to_rank(c) for c in cards)) == 1)
+                is_rocket = (len(cards) == 2 and 52 in cards and 53 in cards)
+                if not is_bomb and not is_rocket:
+                    return f"长度不匹配: 当前出[{current_cards}], 上家出[{last_move_cards}]"
+
+                if is_bomb:
+                    last_is_bomb = (len(self.last_move) == 4 and
+                                    len(set(card_to_rank(c) for c in self.last_move)) == 1)
+                    if not last_is_bomb:
+                        return f"炸弹压制: 当前出[{current_cards}], 上家出[{last_move_cards}]"
+                    if card_to_rank(cards[0]) <= card_to_rank(self.last_move[0]):
+                        return f"炸弹点数不够: 当前出[{current_cards}], 上家出[{last_move_cards}]"
+
+                if is_rocket:
+                    return f"火箭出牌异常: 当前出[{current_cards}], 上家出[{last_move_cards}]"
+
+        return f"校验失败: 当前出[{', '.join(card_to_str(c) for c in cards)}]"
+
     def _verify_and_fix_play(self, player: int, cards: list) -> list:
         if not self._is_valid_play(player, cards):
-            self._log(f"玩家{player}出牌不合法，改用简单Bot代替", "warning")
+            reason = self._describe_invalid_play(player, cards)
+            cards_str = ', '.join(card_to_str(c) for c in cards)
+            self._log(f"玩家{player}出牌不合法: [{cards_str}] | 原因: {reason}，改用简单Bot代替", "warning")
             if not self.player_crashed[player]:
                 self.bot_crashes[player] += 1
             self.player_crashed[player] = True
@@ -297,6 +344,7 @@ class GameJudge:
                 self.last_move = []
                 self._last_play_in_round = [[], [], []]
                 self.pass_count = 0
+                self._pass_cycle_reset = True  # 标记过牌周期已重置
                 self._log(f"连续两人过牌，玩家{self.last_move_player} 获得出牌权", "debug")
 
         return False
@@ -348,6 +396,7 @@ class GameJudge:
 
             if self.player_crashed[player]:
                 cards = self._get_simple_bot_play(player)
+                cards = self._verify_and_fix_play(player, cards)
                 time_used = 0.0
             else:
                 cards, time_used = self._call_bot_for_play(player)
@@ -360,9 +409,14 @@ class GameJudge:
             if game_ended:
                 break
 
-            self.current_player = (self.current_player + 1) % 3
-            if self.pass_count == 0 and not self.last_move:
+            # 检查是否需要重置到上一个出牌的玩家
+            if hasattr(self, '_pass_cycle_reset') and self._pass_cycle_reset:
                 self.current_player = self.last_move_player
+                self._pass_cycle_reset = False
+            else:
+                self.current_player = (self.current_player + 1) % 3
+                if self.pass_count == 0 and not self.last_move:
+                    self.current_player = self.last_move_player
 
         if self.round_count >= max_rounds:
             self._log(f"达到最大回合数{max_rounds}，游戏终止", "warning")
@@ -416,4 +470,6 @@ class GameJudge:
                       f"平均{result[f'bot{p}_avg_time']:.3f}秒 | "
                       f"崩溃{self.bot_crashes[p]}次 | "
                       f"超时{self.bot_timeouts[p]}次", "info")
+        for runner in self.bot_runners:
+            runner.cleanup()
         return result

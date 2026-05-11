@@ -32,9 +32,17 @@ python run_testsuite.py
 # 用 my_bot.exe 测试20局
 python run_testsuite.py --bot my_bot.exe --games 20
 
+# 三家分别指定
+python run_testsuite.py --bot0 my_bot2.exe --bot1 my_bot.exe --bot2 my_bot_dbg.exe --games 20
+
+# 用 DouZero 适配层当对手（放到 DouZero\ 目录下）
+python run_testsuite.py --bot0 my_bot2.exe --bot1 DouZero\douzero_bot_adapter.py --bot2 DouZero\douzero_bot_adapter.py --games 20
+
 # 固定随机种子（可复现）
 python run_testsuite.py --seed 42 --games 5
 
+
+说明：`douzero_bot_adapter.py` 默认会使用规则/启发式策略；如果你把 DouZero 的预训练权重放到 `DouZero\baselines\` 下，并通过环境变量指定模型路径，就可以切换到深度模型。
 # 设置单步超时3秒
 python run_testsuite.py --timeout 3.0
 

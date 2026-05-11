@@ -10,6 +10,7 @@ WORK_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_CONFIG = {
     # Bot 相关
     "bot_path": os.path.join(WORK_DIR, "my_bot2.exe"),   # Bot 可执行文件路径
+    "bot_paths": None,                                  # 三家分别指定的 Bot 路径（None=沿用 bot_path）
     "bot_timeout": 5.0,                                   # 单步超时时间（秒）
     
     # 比赛相关

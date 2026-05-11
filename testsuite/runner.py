@@ -31,16 +31,44 @@ class TestRunner:
 
         # 初始化三个Bot执行器（每个玩家一个独立实例）
         bot_path = self.config.get("bot_path")
+        bot_paths = self.config.get("bot_paths")
         timeout = self.config.get("bot_timeout", 5.0)
 
-        if not os.path.isfile(bot_path):
-            self.logger.warning(f"Bot可执行文件不存在: {bot_path}")
+        if bot_paths is None:
+            bot_paths = [bot_path, bot_path, bot_path]
+        else:
+            bot_paths = list(bot_paths)
+            if len(bot_paths) != 3:
+                raise ValueError("bot_paths 必须包含 3 个路径")
+
+        for idx, path in enumerate(bot_paths):
+            if not os.path.isfile(path):
+                self.logger.warning(f"玩家{idx}的Bot可执行文件不存在: {path}")
 
         self.bot_runners = [
-            BotRunner(bot_path, timeout),  # 玩家0
-            BotRunner(bot_path, timeout),  # 玩家1
-            BotRunner(bot_path, timeout),  # 玩家2
+            BotRunner(bot_paths[0], timeout),  # 玩家0
+            BotRunner(bot_paths[1], timeout),  # 玩家1
+            BotRunner(bot_paths[2], timeout),  # 玩家2
         ]
+
+        # 提取bot简化名（不含路径和扩展名）
+        bot_names_config = self.config.get("bot_names")
+        if bot_names_config and len(bot_names_config) == 3:
+            self.bot_names = list(bot_names_config)
+        else:
+            base_names = [
+                os.path.splitext(os.path.basename(p))[0] for p in bot_paths
+            ]
+            model_name = os.environ.get("DZZERO_MODEL", "")
+            use_deep = os.environ.get("DZZERO_USE_DEEP") == "1"
+            if use_deep and model_name:
+                self.bot_names = [
+                    base_names[0],
+                    model_name,
+                    model_name
+                ]
+            else:
+                self.bot_names = base_names
 
         # 统计信息
         self.results = []
@@ -63,7 +91,8 @@ class TestRunner:
             config=self.config,
             seed=seed,
             game_id=game_id,
-            logger=self.logger
+            logger=self.logger,
+            bot_names=self.bot_names
         )
 
         result = judge.run_game()
@@ -75,7 +104,11 @@ class TestRunner:
         base_seed = self.config.get("seed")
 
         self.logger.info(f"开始测试：共{num_games}局")
-        self.logger.info(f"Bot路径: {self.config.get('bot_path')}")
+        bot_paths = self.config.get("bot_paths")
+        if bot_paths is None:
+            self.logger.info(f"Bot路径: {self.config.get('bot_path')}")
+        else:
+            self.logger.info(f"Bot路径: {bot_paths}")
         self.logger.info(f"每步超时: {self.config.get('bot_timeout')}秒")
         if base_seed is not None:
             self.logger.info(f"基准种子: {base_seed}")
